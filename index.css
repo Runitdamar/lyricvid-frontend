@@ -1,0 +1,62 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background-color: #050507;
+    color: #ffffff;
+    font-family: 'Syne', sans-serif;
+    overflow-x: hidden;
+  }
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: #0a0a0f; }
+  ::-webkit-scrollbar-thumb { background: #ff1fa0; border-radius: 3px; }
+}
+
+@layer components {
+  .glass {
+    background: rgba(255,255,255,0.03);
+    backdrop-filter: blur(20px);
+    border: 1px solid rgba(255,255,255,0.08);
+  }
+  .glass-dark {
+    background: rgba(0,0,0,0.4);
+    backdrop-filter: blur(20px);
+    border: 1px solid rgba(255,255,255,0.05);
+  }
+  .glow-pink { box-shadow: 0 0 20px rgba(255,31,160,0.3), 0 0 60px rgba(255,31,160,0.1); }
+  .gradient-text {
+    background: linear-gradient(135deg, #ff1fa0, #ff96d9, #ffffff);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .glow-text { text-shadow: 0 0 20px rgba(255,31,160,0.8), 0 0 40px rgba(255,31,160,0.4); }
+  .btn-primary {
+    @apply bg-brand-500 hover:bg-brand-400 text-white font-bold px-8 py-3 rounded-full transition-all duration-300 transform hover:scale-105;
+    box-shadow: 0 0 20px rgba(255,31,160,0.4);
+  }
+  .btn-secondary {
+    @apply glass border border-brand-500/30 hover:border-brand-400 text-white font-semibold px-8 py-3 rounded-full transition-all duration-300;
+  }
+  .animated-bg {
+    background: radial-gradient(ellipse at 20% 50%, rgba(255,31,160,0.15) 0%, transparent 50%),
+                radial-gradient(ellipse at 80% 20%, rgba(120,40,200,0.15) 0%, transparent 50%),
+                #050507;
+  }
+  .font-bebas { font-family: 'Bebas Neue', cursive; }
+  .font-orbitron { font-family: 'Orbitron', sans-serif; }
+  .font-bangers { font-family: 'Bangers', cursive; }
+  .font-russo { font-family: 'Russo One', sans-serif; }
+  .font-marker { font-family: 'Permanent Marker', cursive; }
+  .font-bungee { font-family: 'Bungee', cursive; }
+  .font-anton { font-family: 'Anton', sans-serif; }
+  .font-pacifico { font-family: 'Pacifico', cursive; }
+  .font-abril { font-family: 'Abril Fatface', cursive; }
+  .font-teko { font-family: 'Teko', sans-serif; }
+  .font-exo { font-family: 'Exo 2', sans-serif; }
+  .font-righteous { font-family: 'Righteous', cursive; }
+}
