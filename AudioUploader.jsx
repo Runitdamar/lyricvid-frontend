@@ -14,7 +14,11 @@ async function transcribeWithWhisper(file, onStatus) {
   while (attempts < 5) {
     const response = await fetch(HF_URL, {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${HF_TOKEN}`, 'Content-Type': file.type || 'audio/mpeg' },
+      headers: {
+        'Authorization': `Bearer ${HF_TOKEN}`,
+        'Content-Type': file.type || 'audio/mpeg',
+        'X-Wait-For-Model': 'true'
+      },
       body: audioBuffer
     })
     if (response.status === 503) {
