@@ -32,7 +32,7 @@ async function transcribeWithAssemblyAI(file, onStatus) {
     headers,
     body: JSON.stringify({
       audio_url: upload_url,
-      speech_model: 'best',
+      speech_models: ['best'],
       language_code: 'en_us'
     })
   })
