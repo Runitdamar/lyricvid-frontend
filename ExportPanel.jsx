@@ -71,8 +71,14 @@ export default function ExportPanel({ onBack }) {
       const render = (timestamp) => {
         if (startTime.value === null) startTime.value = timestamp
         const elapsed = (timestamp - startTime.value) / 1000
+
         const t = Math.min(elapsed, duration)
-        if (engineRef.current) engineRef.current.renderFrame(t, store.lines, getStyle())
+        const relTime = Math.max(0, (audio.currentTime || 0) - (store.trimStart || 0))
+
+        if (engineRef.current) {
+          engineRef.current.renderFrame(relTime, store.lines, getStyle())
+        }
+
         if (elapsed < duration + 0.5) {
           animRef.current = requestAnimationFrame(render)
         }
@@ -115,7 +121,8 @@ export default function ExportPanel({ onBack }) {
       // Start render, recorder, and audio together
       animRef.current = requestAnimationFrame(render)
       recorder.start(100)
-      audio.currentTime = 0
+
+      audio.currentTime = store.trimStart || 0
       await audio.play()
 
       setProgress(10)
@@ -170,7 +177,16 @@ export default function ExportPanel({ onBack }) {
         <p className="text-white/40 text-sm font-mono">1080×1920 • 9:16 • WebM Video</p>
       </div>
 
-      <canvas ref={canvasRef} className="hidden" />
+      <canvas
+        ref={canvasRef}
+        style={{
+          position: 'fixed',
+          top: '-9999px',
+          left: '-9999px',
+          width: 1080,
+          height: 1920
+        }}
+      />
 
       {/* Summary */}
       <div className="glass rounded-xl p-5 border border-white/10">
@@ -264,4 +280,4 @@ export default function ExportPanel({ onBack }) {
       <motion.button whileHover={{ scale: 1.03 }} onClick={onBack} className="btn-secondary py-3 px-8">← Back</motion.button>
     </div>
   )
-}
+                                                                    }
