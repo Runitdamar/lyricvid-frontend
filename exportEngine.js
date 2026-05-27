@@ -23,11 +23,18 @@ export class ExportEngine {
           dest.stream.getAudioTracks().forEach(t => stream.addTrack(t))
         }
 
-        this.chunks = []
-        this.mediaRecorder = new MediaRecorder(stream, {
-          mimeType: 'video/webm;codecs=vp9',
-          videoBitsPerSecond: 8000000
-        })
+        const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
+  ? 'video/webm;codecs=vp9'
+  : MediaRecorder.isTypeSupported('video/webm;codecs=vp8')
+  ? 'video/webm;codecs=vp8'
+  : MediaRecorder.isTypeSupported('video/webm')
+  ? 'video/webm'
+  : ''
+
+this.mediaRecorder = new MediaRecorder(stream, {
+  ...(mimeType && { mimeType }),
+  videoBitsPerSecond: 8000000
+})
 
         this.mediaRecorder.ondataavailable = e => { if (e.data.size > 0) this.chunks.push(e.data) }
         this.mediaRecorder.onstop = () => {
