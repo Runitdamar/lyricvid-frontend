@@ -3,6 +3,9 @@ import { motion, AnimatePresence } from 'framer-motion'
 import useStudioStore from './studioStore.js'
 import { CanvasEngine } from './canvasEngine.js'
 
+const BACKEND = import.meta.env.VITE_BACKEND_URL || 'https://lyricvid-backend.onrender.com'
+const FPS = 24
+
 export default function ExportPanel({ onBack }) {
   const store = useStudioStore()
   const [isExporting, setIsExporting] = useState(false)
@@ -10,10 +13,8 @@ export default function ExportPanel({ onBack }) {
   const [exportUrl, setExportUrl] = useState(null)
   const [exportError, setExportError] = useState(null)
   const [statusMsg, setStatusMsg] = useState('')
-  const [exportFormat, setExportFormat] = useState('webm')
   const canvasRef = useRef(null)
   const engineRef = useRef(null)
-  const animRef = useRef(null)
 
   const getStyle = () => ({
     font: store.font, primaryColor: store.primaryColor,
@@ -38,122 +39,97 @@ export default function ExportPanel({ onBack }) {
     if (!canvasRef.current) return
     engineRef.current = new CanvasEngine(canvasRef.current, { width: 1080, height: 1920 })
     if (store.backgroundImage) engineRef.current.setBackgroundImage(store.backgroundImage)
-    return () => {
-      if (engineRef.current) engineRef.current.destroy()
-      cancelAnimationFrame(animRef.current)
-    }
+    return () => { if (engineRef.current) engineRef.current.destroy() }
   }, [])
 
   const startExport = async () => {
     if (!canvasRef.current || !store.audioUrl) return
-    setIsExporting(true); setProgress(2); setExportUrl(null); setExportError(null)
+    setIsExporting(true)
+    setProgress(0)
+    setExportUrl(null)
+    setExportError(null)
 
     try {
       const duration = store.audioDuration
-      setStatusMsg('Loading audio...')
+      const totalFrames = Math.ceil(duration * FPS)
+      const frames = []
 
-      // Create fresh audio element for export
-      const audio = new Audio()
-      audio.src = store.audioUrl
-      audio.crossOrigin = 'anonymous'
+      // ── STEP 1: Render every frame offline (no real-time needed) ──
+      setStatusMsg('Rendering frames...')
 
-      await new Promise((resolve, reject) => {
-        audio.oncanplaythrough = resolve
-        audio.onerror = reject
-        audio.load()
+      for (let i = 0; i < totalFrames; i++) {
+        const t = i / FPS  // clip-relative time
+        engineRef.current.renderFrame(t, store.lines, getStyle())
+        frames.push(canvasRef.current.toDataURL('image/jpeg', 0.85))
+
+        // Update progress 0→60%
+        if (i % 10 === 0) {
+          setProgress(Math.round((i / totalFrames) * 60))
+          setStatusMsg(`Rendering frame ${i + 1} / ${totalFrames}`)
+          // Yield to browser so UI doesn't freeze
+          await new Promise(r => setTimeout(r, 0))
+        }
+      }
+
+      setProgress(62)
+      setStatusMsg('Preparing audio...')
+
+      // ── STEP 2: Slice audio to clip ──
+      const audioResp = await fetch(store.audioUrl)
+      const audioArrayBuffer = await audioResp.arrayBuffer()
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)()
+      const decoded = await audioCtx.decodeAudioData(audioArrayBuffer)
+
+      const trimStart = store.trimStart || 0
+      const trimEnd = trimStart + duration
+      const sampleRate = decoded.sampleRate
+      const startSample = Math.floor(trimStart * sampleRate)
+      const endSample = Math.min(Math.floor(trimEnd * sampleRate), decoded.length)
+      const frameCount = endSample - startSample
+
+      // Create trimmed buffer
+      const trimmed = audioCtx.createBuffer(decoded.numberOfChannels, frameCount, sampleRate)
+      for (let ch = 0; ch < decoded.numberOfChannels; ch++) {
+        trimmed.getChannelData(ch).set(decoded.getChannelData(ch).subarray(startSample, endSample))
+      }
+
+      // Encode trimmed audio to WAV
+      const wavBlob = bufferToWav(trimmed)
+      const wavBase64 = await blobToBase64(wavBlob)
+      audioCtx.close()
+
+      setProgress(70)
+      setStatusMsg('Uploading to server...')
+
+      // ── STEP 3: Send to backend ──
+      const payload = { frames, audio: wavBase64, fps: FPS, duration }
+
+      const response = await fetch(`${BACKEND}/api/render`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
       })
 
-      setStatusMsg('Setting up recording...')
-      setProgress(8)
+      setProgress(85)
+      setStatusMsg('Server is rendering MP4...')
 
-      // Canvas render loop
-      const startTime = { value: null }
-      const render = (timestamp) => {
-        if (startTime.value === null) startTime.value = timestamp
-        const elapsed = (timestamp - startTime.value) / 1000
-
-        const t = Math.min(elapsed, duration)
-        const relTime = Math.max(0, (audio.currentTime || 0) - (store.trimStart || 0))
-
-        if (engineRef.current) {
-          engineRef.current.renderFrame(relTime, store.lines, getStyle())
-        }
-
-        if (elapsed < duration + 0.5) {
-          animRef.current = requestAnimationFrame(render)
-        }
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({ error: 'Server error' }))
+        throw new Error(err.error || 'Render failed')
       }
 
-      // Capture canvas at 30fps
-      const canvasStream = canvasRef.current.captureStream(30)
+      setProgress(95)
+      setStatusMsg('Almost done...')
 
-      // Capture audio using Web Audio API
-      const audioCtx = new (window.AudioContext || window.webkitAudioContext)()
-      const source = audioCtx.createMediaElementSource(audio)
-      const dest = audioCtx.createMediaStreamDestination()
-      source.connect(dest)
-      // Don't connect to speakers during export to avoid echo
-      dest.stream.getAudioTracks().forEach(track => canvasStream.addTrack(track))
-
-      // Pick best supported format
-      const mimeType = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'].find(m => MediaRecorder.isTypeSupported(m)) || 'video/webm'
-
-      const recorder = new MediaRecorder(canvasStream, { mimeType, videoBitsPerSecond: 5000000 })
-      const chunks = []
-
-      recorder.ondataavailable = e => { if (e.data && e.data.size > 0) chunks.push(e.data) }
-
-      recorder.onstop = async () => {
-        cancelAnimationFrame(animRef.current)
-        audioCtx.close()
-
-        setStatusMsg('Finalizing...')
-        setProgress(95)
-
-        const blob = new Blob(chunks, { type: 'video/webm' })
-        const url = URL.createObjectURL(blob)
-        setExportUrl(url)
-        setIsExporting(false)
-        setProgress(100)
-        setStatusMsg('')
-      }
-
-      // Start render, recorder, and audio together
-      animRef.current = requestAnimationFrame(render)
-      recorder.start(100)
-
-      audio.currentTime = store.trimStart || 0
-      await audio.play()
-
-      setProgress(10)
-      setStatusMsg('Recording...')
-
-      // Progress + stop tracking
-      const interval = setInterval(() => {
-        const t = audio.currentTime
-        const pct = Math.min(92, 10 + (t / duration) * 82)
-        setProgress(Math.round(pct))
-        setStatusMsg(`Recording ${t.toFixed(1)}s / ${duration.toFixed(1)}s`)
-
-        if (t >= duration - 0.05) {
-          clearInterval(interval)
-          audio.pause()
-          setTimeout(() => {
-            if (recorder.state !== 'inactive') recorder.stop()
-          }, 500)
-        }
-      }, 250)
-
-      // Safety stop
-      setTimeout(() => {
-        clearInterval(interval)
-        audio.pause()
-        if (recorder.state !== 'inactive') recorder.stop()
-      }, (duration + 4) * 1000)
+      const blob = await response.blob()
+      const url = URL.createObjectURL(blob)
+      setExportUrl(url)
+      setProgress(100)
+      setStatusMsg('')
+      setIsExporting(false)
 
     } catch (err) {
       console.error('Export error:', err)
-      cancelAnimationFrame(animRef.current)
       setExportError(err.message)
       setIsExporting(false)
       setStatusMsg('')
@@ -164,7 +140,7 @@ export default function ExportPanel({ onBack }) {
     if (!exportUrl) return
     const a = document.createElement('a')
     a.href = exportUrl
-    a.download = `lyricvid-${Date.now()}.webm`
+    a.download = `lyricvid-${Date.now()}.mp4`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
@@ -174,21 +150,11 @@ export default function ExportPanel({ onBack }) {
     <div className="space-y-6">
       <div className="text-center mb-4">
         <h2 className="font-bebas text-4xl tracking-wider gradient-text mb-1">EXPORT REEL</h2>
-        <p className="text-white/40 text-sm font-mono">1080×1920 • 9:16 • WebM Video</p>
+        <p className="text-white/40 text-sm font-mono">1080×1920 • 9:16 • MP4 Video</p>
       </div>
 
-      <canvas
-        ref={canvasRef}
-        style={{
-          position: 'fixed',
-          top: '-9999px',
-          left: '-9999px',
-          width: 1080,
-          height: 1920
-        }}
-      />
+      <canvas ref={canvasRef} style={{ position: 'fixed', top: '-9999px', left: '-9999px' }} width={1080} height={1920} />
 
-      {/* Summary */}
       <div className="glass rounded-xl p-5 border border-white/10">
         <div className="grid grid-cols-2 gap-3">
           {[
@@ -197,7 +163,7 @@ export default function ExportPanel({ onBack }) {
             ['Theme', store.theme || 'custom'],
             ['Transition', store.lineTransition],
             ['Effect', store.textEffect],
-            ['Format', '9:16 WebM']
+            ['Format', '9:16 MP4']
           ].map(([label, value]) => (
             <div key={label} className="glass rounded-lg p-3 border border-white/5">
               <p className="text-white/25 text-xs font-mono uppercase">{label}</p>
@@ -211,13 +177,13 @@ export default function ExportPanel({ onBack }) {
         {!isExporting && !exportUrl && (
           <motion.div key="ready" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-4">
             <div className="glass rounded-xl p-4 border border-yellow-500/15 text-yellow-400/50 text-xs font-mono space-y-1">
-              <p>⚠️ Use Chrome browser for best results</p>
-              <p>⚠️ Keep screen on — export takes {store.audioDuration.toFixed(0)}s in real time</p>
-              <p>⚠️ Do not switch tabs during export</p>
+              <p>⚠️ Export renders all frames then sends to server</p>
+              <p>⚠️ Takes ~1-2 min for a 60s clip — please wait</p>
+              <p>⚠️ Keep this tab open the whole time</p>
             </div>
             <motion.button whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} onClick={startExport}
               className="btn-primary w-full py-5 text-xl">
-              🎬 Start Export
+              🎬 Export as MP4
             </motion.button>
           </motion.div>
         )}
@@ -227,14 +193,14 @@ export default function ExportPanel({ onBack }) {
             className="glass rounded-xl p-6 border border-red-500/30 space-y-4">
             <div className="flex items-center gap-3">
               <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse" />
-              <span className="font-mono text-red-400 text-sm font-bold">● REC</span>
+              <span className="font-mono text-red-400 text-sm font-bold">● RENDERING</span>
               <span className="font-mono text-white/30 text-xs ml-auto">{statusMsg}</span>
             </div>
             <div className="w-full bg-white/10 rounded-full h-3 overflow-hidden">
               <motion.div className="h-3 rounded-full bg-gradient-to-r from-red-600 to-brand-400"
                 animate={{ width: `${progress}%` }} transition={{ duration: 0.3 }} />
             </div>
-            <p className="font-mono text-xs text-white/20 text-center">{progress}% — do not close or switch tabs</p>
+            <p className="font-mono text-xs text-white/20 text-center">{progress}% — do not close this tab</p>
           </motion.div>
         )}
 
@@ -243,27 +209,20 @@ export default function ExportPanel({ onBack }) {
             className="space-y-4">
             <div className="glass rounded-xl p-5 border border-green-500/30 text-center space-y-3">
               <div className="text-5xl">🎉</div>
-              <h3 className="font-bebas text-3xl tracking-wider text-green-400">REEL IS READY!</h3>
+              <h3 className="font-bebas text-3xl tracking-wider text-green-400">MP4 IS READY!</h3>
               <p className="text-white/30 text-sm">Download and post to Instagram, TikTok or YouTube Shorts</p>
             </div>
-
             <div className="flex justify-center">
               <video src={exportUrl} controls playsInline
                 className="rounded-2xl border border-white/10 glow-pink"
                 style={{ maxHeight: 400, aspectRatio: '9/16', maxWidth: '100%' }} />
             </div>
-
             <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.97 }} onClick={download}
               className="btn-primary w-full py-4 text-lg">
-              ⬇️ Download Reel (.webm)
+              ⬇️ Download MP4
             </motion.button>
-
-            <div className="glass rounded-xl p-4 border border-white/5 text-xs font-mono text-white/30 space-y-1">
-              <p>💡 To convert to MP4: open VLC or use <a href="https://cloudconvert.com/webm-to-mp4" target="_blank" className="text-brand-400 underline">cloudconvert.com</a> (free)</p>
-              <p>💡 WebM plays natively in Chrome and Android</p>
-            </div>
-
-            <button onClick={() => { setExportUrl(null); setProgress(0) }} className="btn-secondary w-full py-3 text-sm">Re-export</button>
+            <button onClick={() => { setExportUrl(null); setProgress(0) }}
+              className="btn-secondary w-full py-3 text-sm">Re-export</button>
           </motion.div>
         )}
 
@@ -271,7 +230,6 @@ export default function ExportPanel({ onBack }) {
           <motion.div key="error" initial={{ opacity: 0 }} animate={{ opacity: 1 }}
             className="rounded-xl p-5 bg-red-500/10 border border-red-500/30 text-red-400 text-sm space-y-2">
             <p><strong>Export failed:</strong> {exportError}</p>
-            <p className="text-red-300/40 text-xs">Make sure you're using Chrome and try again.</p>
             <button onClick={() => setExportError(null)} className="text-red-300 underline text-xs">Try again</button>
           </motion.div>
         )}
@@ -280,4 +238,53 @@ export default function ExportPanel({ onBack }) {
       <motion.button whileHover={{ scale: 1.03 }} onClick={onBack} className="btn-secondary py-3 px-8">← Back</motion.button>
     </div>
   )
-                                                                    }
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result)
+    reader.onerror = reject
+    reader.readAsDataURL(blob)
+  })
+}
+
+function bufferToWav(buffer) {
+  const numChannels = buffer.numberOfChannels
+  const sampleRate = buffer.sampleRate
+  const format = 1 // PCM
+  const bitDepth = 16
+  const bytesPerSample = bitDepth / 8
+  const blockAlign = numChannels * bytesPerSample
+  const byteRate = sampleRate * blockAlign
+  const dataLength = buffer.length * blockAlign
+  const arrayBuffer = new ArrayBuffer(44 + dataLength)
+  const view = new DataView(arrayBuffer)
+
+  const writeString = (offset, str) => { for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i)) }
+  writeString(0, 'RIFF')
+  view.setUint32(4, 36 + dataLength, true)
+  writeString(8, 'WAVE')
+  writeString(12, 'fmt ')
+  view.setUint32(16, 16, true)
+  view.setUint16(20, format, true)
+  view.setUint16(22, numChannels, true)
+  view.setUint32(24, sampleRate, true)
+  view.setUint32(28, byteRate, true)
+  view.setUint16(32, blockAlign, true)
+  view.setUint16(34, bitDepth, true)
+  writeString(36, 'data')
+  view.setUint32(40, dataLength, true)
+
+  let offset = 44
+  for (let i = 0; i < buffer.length; i++) {
+    for (let ch = 0; ch < numChannels; ch++) {
+      const sample = Math.max(-1, Math.min(1, buffer.getChannelData(ch)[i]))
+      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true)
+      offset += 2
+    }
+  }
+  return new Blob([arrayBuffer], { type: 'audio/wav' })
+      }
