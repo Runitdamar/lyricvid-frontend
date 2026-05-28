@@ -165,12 +165,7 @@ const trimStart = store.trimStart || 0
           headers: {
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify({
-            jobId,
-            audio: wavBase64,
-            fps: FPS,
-            duration
-          })
+          body: JSON.stringify({ jobId, audio: wavBase64, fps: FPS, duration, trimStart })       
         }
       )
 
