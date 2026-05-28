@@ -98,62 +98,14 @@ export default function ExportPanel({ onBack }) {
           await new Promise(r => setTimeout(r, 0))
         }
       }
+setProgress(62)
+setStatusMsg('Preparing audio...')
 
-      setProgress(62)
-      setStatusMsg('Preparing audio...')
-
-      // ── STEP 2: Slice audio to clip ──
-      const audioResp = await fetch(store.audioUrl)
-      const audioArrayBuffer = await audioResp.arrayBuffer()
-
-      const audioCtx = new (
-        window.AudioContext ||
-        window.webkitAudioContext
-      )()
-
-      const decoded = await audioCtx.decodeAudioData(
-        audioArrayBuffer
-      )
-
-      const trimStart = store.trimStart || 0
-      const trimEnd = trimStart + duration
-
-      const sampleRate = decoded.sampleRate
-
-      const startSample = Math.floor(
-        trimStart * sampleRate
-      )
-
-      const endSample = Math.min(
-        Math.floor(trimEnd * sampleRate),
-        decoded.length
-      )
-
-      const frameCount = endSample - startSample
-
-      // Create trimmed buffer
-      const trimmed = audioCtx.createBuffer(
-        decoded.numberOfChannels,
-        frameCount,
-        sampleRate
-      )
-
-      for (let ch = 0; ch < decoded.numberOfChannels; ch++) {
-        trimmed
-          .getChannelData(ch)
-          .set(
-            decoded
-              .getChannelData(ch)
-              .subarray(startSample, endSample)
-          )
-      }
-
-      // Encode trimmed audio to WAV
-      const wavBlob = bufferToWav(trimmed)
-      const wavBase64 = await blobToBase64(wavBlob)
-
-      audioCtx.close()
-
+// Skip trimming — send full audio, backend will trim with FFmpeg
+const audioResp = await fetch(store.audioUrl)
+const audioBlob = await audioResp.blob()
+const wavBase64 = await blobToBase64(audioBlob)
+const trimStart = store.trimStart || 0
       setProgress(70)
       setStatusMsg('Uploading to server...')
 
