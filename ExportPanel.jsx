@@ -111,7 +111,7 @@ const trimStart = store.trimStart || 0
 
       // ── STEP 3: Upload frames in chunks ──
       const jobId = `job_${Date.now()}`
-      const CHUNK_SIZE = 60
+      const CHUNK_SIZE = 30
 
       for (let i = 0; i < frames.length; i += CHUNK_SIZE) {
         const chunk = frames.slice(i, i + CHUNK_SIZE)
@@ -139,11 +139,9 @@ const trimStart = store.trimStart || 0
         )
 
         if (!chunkResp.ok) {
-          throw new Error(
-            'Chunk upload failed at chunk ' + chunkIndex
-          )
+  const errText = await chunkResp.text().catch(() => 'unknown')
+  throw new Error(`Chunk ${chunkIndex} failed: ${errText}`)
         }
-
         const uploadPct =
           70 + Math.round((i / frames.length) * 15)
 
